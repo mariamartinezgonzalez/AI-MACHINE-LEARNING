@@ -69,6 +69,46 @@ When you want to add new pictures of clothes, you don’t need to retrain the mo
 <img width="432" alt="image" src="https://github.com/user-attachments/assets/d2a4e2c9-dc8e-41c3-ad83-72c2b0c96aee" />
 
 
+# Code in Google Colab Rules of combination:
+We have created rules for the app to generate realistic outfits and not just random combinations. First we ask the user what type of outfit it need for today.
+style = input("Choose your style (casual or chic): "). If it selects casual we also ask for a coat: coat_answer = input("Do you want a coat layer? (yes/no): "). 
+
+Chic Outfits Rules:
+- Set + Heels + Complement
+    - If the item is labeled as a set, it must be paired with heels and a complement (bag).
+    - No other clothing is added (no top or bottom).
+- Skirt + Top + Heels + Complement
+    - If the item is a bottom (pants/skirt), it is combined with a top.
+    - The top and bottom cannot both be patterned.
+    - Heels and a complement are added.
+
+Casual Outfits Rules:
+- Top + Bottom + Shoes + Complement
+    - Combines a top and bottom with either flats or sneakers.
+    - Never includes heels.
+    - Allows patterned clothing only if not both top and bottom are patterned.
+- Optional: Jacket or Coat
+    - A blazer (jacket) is added to casual outfits by default.
+    - A coat is only added if the user answered "yes" to the cold-weather prompt.
+    - A patterned coat is only allowed if the rest of the outfit is plain.
+
+# Code in Google Colab Outfit Generator:
+Libraries:
+- pandas: saves and loads outfit combinations.
+- matplotlib.pyplot + matplotlib.image: show clothing images.
+- ipywidgets: buttons (Yes / No).
+- IPython.display: updates output in real time
+  
+How does it work?
+- Decides which function to call based on the user’s style choice (chic/casual)
+- Once outfit is generated, 2 buttons appear:
+    - Yes: you like the outfit and you will save it.
+    - No: you don´t like th eoutfit, the code will generate a new one.
+- The outfit is saved to the appropriate CSV file.
+
+<img width="797" alt="image" src="https://github.com/user-attachments/assets/3c23a0a7-3b37-40cd-810b-3e4a6ca89ebf" />
+<img width="785" alt="image" src="https://github.com/user-attachments/assets/26a5e151-b4ef-4284-b03e-0bf7adec9621" />
+<img width="767" alt="image" src="https://github.com/user-attachments/assets/06e01527-a7f0-4f4e-b684-c635285c7bea" />
 
 
 
