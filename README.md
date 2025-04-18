@@ -114,7 +114,8 @@ CHIC:
 CASUAL:
 <img width="907" alt="image" src="https://github.com/user-attachments/assets/cf88cca3-dfd3-46f0-8283-531f90b568fe" />
 <img width="894" alt="image" src="https://github.com/user-attachments/assets/faaea166-9415-4abf-a483-1a3a4ef75ee7" />
-<img width="886" alt="image" src="https://github.com/user-attachments/assets/ebce8e88-f38a-4796-a99b-22337861510f" />
+<img width="886" alt="image" src="https://github.com/user-attachments/assets/a4c09dc8-4450-4ee1-ae6f-bfc35609c15c" />
+
 
 
 
