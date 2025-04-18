@@ -36,6 +36,9 @@ Example: Bottom_labeled.csv
 - bfe12.png: bottom + skirt + patterned
 - be2.jpg:   bottom + pants+ patterned
 - bf7.png:   bottom + skirt +  plain + dark
+  
+![image](https://github.com/user-attachments/assets/502bad5e-5092-4af6-9560-8a71df1fe4f0)
+
 
 These CSVs were used to train our AI models to recognize and classify each new clothing image automatically. They're also the foundation for our rule-based outfit generator.
 
