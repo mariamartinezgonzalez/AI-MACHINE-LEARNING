@@ -107,11 +107,14 @@ How does it work?
 - The outfit is saved to the appropriate CSV file.
   
 CHIC:
+
 <img width="797" alt="image" src="https://github.com/user-attachments/assets/3c23a0a7-3b37-40cd-810b-3e4a6ca89ebf" />
 <img width="785" alt="image" src="https://github.com/user-attachments/assets/26a5e151-b4ef-4284-b03e-0bf7adec9621" />
 <img width="767" alt="image" src="https://github.com/user-attachments/assets/06e01527-a7f0-4f4e-b684-c635285c7bea" />
 
+
 CASUAL:
+
 <img width="907" alt="image" src="https://github.com/user-attachments/assets/cf88cca3-dfd3-46f0-8283-531f90b568fe" />
 <img width="894" alt="image" src="https://github.com/user-attachments/assets/faaea166-9415-4abf-a483-1a3a4ef75ee7" />
 <img width="886" alt="image" src="https://github.com/user-attachments/assets/a4c09dc8-4450-4ee1-ae6f-bfc35609c15c" />
