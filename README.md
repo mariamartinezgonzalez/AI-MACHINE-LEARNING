@@ -88,7 +88,7 @@ Casual Outfits Rules:
     - Never includes heels.
     - Allows patterned clothing only if not both top and bottom are patterned.
 - Optional: Jacket or Coat
-    - A blazer (jacket) is added to casual outfits by default.
+    - A blazer is added to casual outfits depending on the outfit.
     - A coat is only added if the user answered "yes" to the cold-weather prompt.
     - A patterned coat is only allowed if the rest of the outfit is plain.
 
@@ -105,10 +105,17 @@ How does it work?
     - Yes: you like the outfit and you will save it.
     - No: you don´t like th eoutfit, the code will generate a new one.
 - The outfit is saved to the appropriate CSV file.
-
+  
+CHIC:
 <img width="797" alt="image" src="https://github.com/user-attachments/assets/3c23a0a7-3b37-40cd-810b-3e4a6ca89ebf" />
 <img width="785" alt="image" src="https://github.com/user-attachments/assets/26a5e151-b4ef-4284-b03e-0bf7adec9621" />
 <img width="767" alt="image" src="https://github.com/user-attachments/assets/06e01527-a7f0-4f4e-b684-c635285c7bea" />
+
+CASUAL:
+<img width="907" alt="image" src="https://github.com/user-attachments/assets/cf88cca3-dfd3-46f0-8283-531f90b568fe" />
+<img width="894" alt="image" src="https://github.com/user-attachments/assets/faaea166-9415-4abf-a483-1a3a4ef75ee7" />
+<img width="886" alt="image" src="https://github.com/user-attachments/assets/ebce8e88-f38a-4796-a99b-22337861510f" />
+
 
 
 
