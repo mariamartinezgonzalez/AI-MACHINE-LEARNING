@@ -1,0 +1,1502 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os
+import random
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+from torch.utils.data import Dataset
+from PIL import Image
+from torchvision import models
+import matplotlib.pyplot as plt
+import pandas as pd
+from torchvision import transforms
+from torch.utils.data import DataLoader
+
+all_labels = [
+    "top", "bottom", "set", "shoes", "jacket", "complement",
+    "pants", "skirt", "coat", "blazer", "flat", "sneaker", "heel", "boot", "bag",
+    "plain", "patterned",
+    "light", "dark"
+]
+
+group_labels = {
+    1: "bottom + pants + plain + dark",
+    2: "bottom + pants + plain + light",
+    3: "bottom + pants + patterned",
+    4: "bottom + skirt + patterned",
+    5: "bottom + skirt + plain + light",
+    6: "bottom + skirt + plain + dark"
+}
+
+grouped_bottoms = {
+    1: ['b2.png', 'b5.png', 'b12.png', 'b19.png', 'b21.png', 'b25.png', 'b11.png','b7.png','b3.png', 'b6.png', 'b22.png', 'b23.png', 'b24.png','b8.png'],
+    2: ['b1.png','b4.png', 'b16.png',  'b17.png',  'b18.png', 'b14.png','b10.png', 'b9.png', 'b11.png',  'b13.png',  'b20.png'],
+    3: ['be1.png', 'be2.png', 'be3.png', 'be4.png', 'be5.png', 'be6.png', 'be7.png', 'be8.png', 'be9.png', 'be10.png', 'be11.png', 'be12.png', 'be13.png'],
+    4: ['bfe1.png', 'bfe2.png', 'bfe3.png', 'bfe4.png', 'bfe5.png', 'bfe6.png', 'bfe7.png', 'bfe8.png', 'bfe9.png', 'bfe10.png', 'bfe11.png'],
+    5: ['bf15.png', 'bf9.png', 'bf6.png', 'bf1.png', 'bf10.png', 'bf20.png'],
+    6: ['bf18.png', 'bf13.png', 'bf12.png', 'bf7.png', 'bf8.png', 'bf2.png', 'bf3.png', 'bf5.png', 'bf4.png', 'bf19.png', 'bf17.png', 'bf14.png', 'bf11.png', 'bf16.png']
+}
+
+# STEP 1: Write grouped data to the CSV
+labeled_bottoms = []
+
+for group_id, files in grouped_bottoms.items():
+    label = group_labels.get(group_id, "unknown")
+    for filename in files:
+        labeled_bottoms.append({
+            "filename": filename,
+            "label": label
+        })
+
+# Save to CSV
+bottom_sv_path = "/content/drive/MyDrive/clothing_dataset/bottom_labeled.csv"
+df = pd.DataFrame(labeled_bottoms)
+df.to_csv(bottom_sv_path, index=False)
+print("bottom_labeled.csv populated and saved!")
+
+
+class BottomsDataset(Dataset):
+    def __init__(self, csv_path, image_folder, all_labels, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.image_folder = image_folder
+        self.transform = transform
+        self.all_labels = all_labels
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.image_folder, row['filename'])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label_vector = torch.zeros(len(self.all_labels))
+        for tag in row['label'].split("+"):
+            tag = tag.strip()
+            if tag in self.all_labels:
+                label_vector[self.all_labels.index(tag)] = 1
+
+        return image, label_vector
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor()
+])
+
+# STEP 4: Load Bottoms Data
+csv_path = "/content/drive/MyDrive/clothing_dataset/bottom_labeled.csv"
+image_folder = "/content/drive/MyDrive/clothing_dataset/bottom"
+
+bottoms_dataset = BottomsDataset(csv_path, image_folder, all_labels, transform)
+loader = DataLoader(bottoms_dataset, batch_size=8, shuffle=True)
+
+# STEP 5: Classifier
+class BottomClassifier(nn.Module):
+    def __init__(self, num_labels):
+        super().__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_labels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+
+model = BottomClassifier(num_labels=len(all_labels)).to("cuda" if torch.cuda.is_available() else "cpu")
+criterion = nn.BCELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+for epoch in range(15):
+    model.train()
+    total_loss = 0
+    for imgs, labels in loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        preds = model(imgs)
+        loss = criterion(preds, labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+model_path = "/content/drive/MyDrive/clothing_dataset/bottom_classifier.pt"
+torch.save(model.state_dict(), model_path)
+print("Model saved!")
+
+# STEP 8: Predict with Confidence
+
+def predict_labels(image_path):
+    model.eval()
+    image = Image.open(image_path).convert("RGB")
+    image = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = model(image)[0].cpu().numpy()
+    predicted = [(all_labels[i], output[i]) for i in range(len(output)) if output[i] > 0.5]
+    labels = [lbl for lbl, _ in predicted]
+    print("Predicted Labels:")
+    for lbl, prob in predicted:
+        print(f"• {lbl}: {prob:.2f}")
+    return labels
+
+
+# STEP 9: Append to CSV
+def save_to_csv(filename, labels):
+    label_string = " + ".join(labels)
+    df = pd.read_csv(csv_path)
+    new_row = pd.DataFrame([{"filename": filename, "label": label_string}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Added {filename} to bottom_labeled.csv")
+
+# STEP 10: Label New Image
+def label_new_bottom(image_path):
+    predicted_labels = predict_labels(image_path)
+    filename = os.path.basename(image_path)
+    save_to_csv(filename, predicted_labels)
+    return predicted_labels
+
+def show_similarity_bottom(img1_path, img2_path):
+    import matplotlib.pyplot as plt
+    from PIL import Image
+    import torch
+
+    try:
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+    except Exception as e:
+        print(f"Error loading image:\n{e}")
+        return
+
+    model.eval()
+    img1_tensor = transform(img1).unsqueeze(0).to(device)
+    img2_tensor = transform(img2).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        # Extract all CNN layers except the final classifier
+        backbone = nn.Sequential(*list(model.model.children())[:-1])
+        features1 = backbone(img1_tensor).flatten(1)
+        features2 = backbone(img2_tensor).flatten(1)
+        similarity = torch.nn.functional.cosine_similarity(features1, features2).item()
+
+    # Show images side by side
+    plt.figure(figsize=(6, 3))
+
+    plt.subplot(1, 2, 1)
+    plt.imshow(img1)
+    plt.title("Image 1")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img2)
+    plt.title(f"Image 2\nSimilarity: {similarity:.2f}")
+    plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f"Similarity Score: {similarity:.2f}")
+
+
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/b1.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/b11.png"
+)
+
+# Same category (plain skirts)
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/bf3.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/bf12.png"
+)
+
+# Pattern pants vs pattern pants
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/be1.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/be9.png"
+)
+
+# Skirt vs pants
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/bf3.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/b2.png"
+)
+
+# Pattern skirt vs plain pants
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/bfe4.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/b1.png"
+)
+
+# Pattern pants vs pattern skirt
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/be1.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/bfe2.png"
+)
+
+# Pattern skirt vs pattern skirt
+show_similarity_bottom(
+    "/content/drive/MyDrive/clothing_dataset/bottom/bfe1.png",
+    "/content/drive/MyDrive/clothing_dataset/bottom/bfe5.png"
+)
+
+
+# STEP 12: Test N Random Bottom Images
+def test_bottom_images(sample_folder, count=5):
+    samples = random.sample(os.listdir(sample_folder), count)
+    for img in samples:
+        print(f"\n Testing: {img}")
+        path = os.path.join(sample_folder, img)
+        label_new_bottom(path)
+
+group_labels = {
+    1: "top + plain + dark",
+    2: "top + plain + light",
+    3: "top + patterned"
+}
+
+grouped_tops = {
+    1: ['t43.jpg', 't42.jpg', 't41.jpg', 't39.jpg', 't28.jpg', 't23.jpg', 't17.jpg', 't14.jpg', 't8.jpg', 't7.jpg', 't4.jpg', 't3.jpg', 't1.jpg'],
+    2: ['t18.jpg', 't27.jpg', 't37.jpg', 't38.jpg', 't36.jpg', 't34.jpg', 't30.jpg', 't31.jpg', 't25.jpg', 't26.jpg', 't19.jpg', 't21.jpg', 't15.jpg', 't16.jpg', 't9.jpg', 't6.jpg'],
+    3: ['te1.jpg', 'te2.jpg', 'te3.jpg', 'te4.jpg', 'te5.jpg', 'te6.jpg', 'te7.jpg', 'te8.jpg', 'te9.jpg', 'te10.jpg', 'te11.jpg', 'te12.jpg', 'te13.jpg', 'te14.jpg', 'te15.jpg', 'te16.jpg', 'te17.jpg', 'te18.jpg', 'te19.jpg', 'te20.jpg', 'te21.jpg', 'te22.jpg', 'te23.jpg', 'te24.jpg', 'te25.jpg', 'te26.jpg', 'te27.jpg', 'te28.jpg', 'te29.jpg', 'te30.jpg','te31.jpg', 'te32.jpg', 'te33.jpg', 'te34.jpg', 'te35.jpg', 'te36.jpg', 'te37.jpg', 'te38.jpg', 'te39.jpg', 'te40.jpg']
+}
+
+labeled_tops = []
+
+for group_id, files in grouped_tops.items():
+    label = group_labels.get(group_id, "unknown")
+    for filename in files:
+        labeled_tops.append({
+            "filename": filename,
+            "label": label
+        })
+
+csv_path_top = "/content/drive/MyDrive/clothing_dataset/top_labeled.csv"
+df = pd.DataFrame(labeled_tops)
+df.to_csv(csv_path_top, index=False)
+print("top_labeled.csv populated and saved!")
+
+# STEP 2: Dataset Class for Tops
+class TopsDataset(Dataset):
+    def __init__(self, csv_path, image_folder, all_labels, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.image_folder = image_folder
+        self.transform = transform
+        self.all_labels = all_labels
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.image_folder, row['filename'])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label_vector = torch.zeros(len(self.all_labels))
+        for tag in row['label'].split("+"):
+            tag = tag.strip()
+            if tag in self.all_labels:
+                label_vector[self.all_labels.index(tag)] = 1
+
+        return image, label_vector
+
+
+# STEP 3: Load Data
+csv_path = "/content/drive/MyDrive/clothing_dataset/top_labeled.csv"
+image_folder = "/content/drive/MyDrive/clothing_dataset/top"
+tops_dataset = TopsDataset(csv_path, image_folder, all_labels, transform)
+top_loader = DataLoader(tops_dataset, batch_size=8, shuffle=True)
+
+# STEP 4: Classifier
+class TopClassifier(nn.Module):
+    def __init__(self, num_labels):
+        super().__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_labels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+top_model = TopClassifier(num_labels=len(all_labels)).to(device)
+top_criterion = nn.BCELoss()
+top_optimizer = torch.optim.Adam(top_model.parameters(), lr=1e-4)
+
+# STEP 5: Train
+for epoch in range(15):
+    top_model.train()
+    total_loss = 0
+    for imgs, labels in top_loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        preds = top_model(imgs)
+        loss = top_criterion(preds, labels)
+        top_optimizer.zero_grad()
+        loss.backward()
+        top_optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+# STEP 6: Save Trained Model
+torch.save(top_model.state_dict(), "/content/drive/MyDrive/clothing_dataset/top_classifier.pt")
+print("Top model saved!")
+
+# STEP 7: Predict with Confidence
+def predict_labels_top(image_path):
+    top_model.eval()
+    image = Image.open(image_path).convert("RGB")
+    image = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = top_model(image)[0].cpu().numpy()
+    predicted = [(all_labels[i], output[i]) for i in range(len(output)) if output[i] > 0.5]
+    labels = [lbl for lbl, _ in predicted]
+    print("Predicted Labels:")
+    for lbl, prob in predicted:
+        print(f"• {lbl}: {prob:.2f}")
+    return labels
+
+def save_to_csv_top(filename, labels):
+    label_string = " + ".join(labels)
+    df = pd.read_csv(csv_path)
+    new_row = pd.DataFrame([{"filename": filename, "label": label_string}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Added {filename} to top_labeled.csv")
+
+
+# STEP 9: Label New Image
+def label_new_top(image_path):
+    predicted_labels = predict_labels_top(image_path)
+    filename = os.path.basename(image_path)
+    save_to_csv_top(filename, predicted_labels)
+    return predicted_labels
+
+def show_similarity_top(img1_path, img2_path):
+    top_model.eval()
+    try:
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+    except Exception as e:
+        print(f" Error loading image:\n{e}")
+        return
+
+    img1_tensor = transform(img1).unsqueeze(0).to(device)
+    img2_tensor = transform(img2).unsqueeze(0).to(device)
+    with torch.no_grad():
+        backbone = nn.Sequential(*list(top_model.model.children())[:-1])
+        features1 = backbone(img1_tensor).flatten(1)
+        features2 = backbone(img2_tensor).flatten(1)
+        similarity = torch.nn.functional.cosine_similarity(features1, features2).item()
+
+    plt.figure(figsize=(6, 3))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img1)
+    plt.title("Image 1")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img2)
+    plt.title(f"Image 2\nSimilarity: {similarity:.2f}")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"Similarity Score: {similarity:.2f}")
+
+show_similarity_top(
+    "/content/drive/MyDrive/clothing_dataset/top/t1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/top/t10.jpg"
+)
+
+show_similarity_top(
+    "/content/drive/MyDrive/clothing_dataset/top/t5.jpg",
+    "/content/drive/MyDrive/clothing_dataset/top/t15.jpg"
+)
+
+show_similarity_top(
+    "/content/drive/MyDrive/clothing_dataset/top/te1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/top/te4.jpg"
+)
+
+show_similarity_top(
+    "/content/drive/MyDrive/clothing_dataset/top/te3.jpg",
+    "/content/drive/MyDrive/clothing_dataset/top/te7.jpg"
+)
+
+show_similarity_top(
+    "/content/drive/MyDrive/clothing_dataset/top/t2.jpg",
+    "/content/drive/MyDrive/clothing_dataset/top/te2.jpg"
+)
+
+show_similarity_top(
+    "/content/drive/MyDrive/clothing_dataset/top/t12.jpg",
+    "/content/drive/MyDrive/clothing_dataset/top/te5.jpg"
+)
+
+
+# STEP 11: Test Random Tops
+def test_top_images(sample_folder, count=5):
+    samples = random.sample(os.listdir(sample_folder), count)
+    for img in samples:
+        print(f"\n Testing: {img}")
+        path = os.path.join(sample_folder, img)
+        label_new_top(path)
+
+group_labels = {
+    1: "set + plain + dark",
+    2: "set + plain + light",
+    3: "set + patterned"
+}
+
+grouped_sets = {
+    1: ['s1.jpg', 's6.jpg', 's7.jpg', 's8.jpg', 's11.jpg', 's12.jpg', 's2.jpg', 's3.jpg', 's4.jpg', 's5.jpg', 's9.jpg', 's10.jpg', 's13.jpg', 's14.jpg', 's15.jpg', 's16.jpg', 's17.jpg', 's18.jpg', 's19.jpg', 's20.jpg', 's21.jpg', 's22.jpg', 's23.jpg', 's24.jpg', 's25.jpg', 's26.jpg', 's27.jpg', 's28.jpg', 's29.jpg', 's30.jpg', 's31.jpg', 's32.jpg', 's33.jpg', 's34.jpg', 's35.jpg', 's36.jpg', 's37.jpg', 's38.jpg', 's39.jpg', 's40.jpg'],
+    2: ['s1.jpg', 's2.jpg', 's3.jpg', 's4.jpg', 's5.jpg', 's6.jpg', 's7.jpg', 's10.jpg', 's12.jpg', 's15.jpg','s16.jpg', 's17.jpg', 's18.jpg', 's20.jpg', 's21.jpg', 's22.jpg', 's23.jpg', 's24.jpg', 's26.jpg','s27.jpg', 's28.jpg', 's29.jpg', 's33.jpg', 's34.jpg', 's36.jpg', 's37.jpg', 's38.jpg', 's39.jpg', 's40.jpg'],
+    3: ['se1.jpg', 'se2.jpg', 'se3.jpg', 'se4.jpg', 'se5.jpg', 'se6.jpg', 'se7.jpg', 'se8.jpg', 'se9.jpg', 'se10.jpg', 'se11.jpg', 'se12.jpg', 'se13.jpg', 'se14.jpg', 'se15.jpg', 'se16.jpg', 'se17.jpg', 'se18.jpg', 'se19.jpg', 'se20.jpg', 'se21.jpg', 'se22.jpg', 'se23.jpg', 'se24.jpg', 'se25.jpg', 'se26.jpg']
+}
+
+labeled_sets = []
+
+for group_id, files in grouped_sets.items():
+    label = group_labels.get(group_id, "unknown")
+    for filename in files:
+        labeled_sets.append({
+            "filename": filename,
+            "label": label
+        })
+
+# Guardar CSV
+csv_path_set = "/content/drive/MyDrive/clothing_dataset/set_labeled.csv"
+df = pd.DataFrame(labeled_sets)
+df.to_csv(csv_path_set, index=False)
+print("set_labeled.csv populated and saved!")
+
+class SetsDataset(Dataset):
+    def __init__(self, csv_path, image_folder, all_labels, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.image_folder = image_folder
+        self.transform = transform
+        self.all_labels = all_labels
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.image_folder, row['filename'])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label_vector = torch.zeros(len(self.all_labels))
+        for tag in row['label'].split("+"):
+            tag = tag.strip()
+            if tag in self.all_labels:
+                label_vector[self.all_labels.index(tag)] = 1
+
+        return image, label_vector
+
+# STEP 3: Load Data
+csv_path = "/content/drive/MyDrive/clothing_dataset/set_labeled.csv"
+image_folder = "/content/drive/MyDrive/clothing_dataset/set"
+sets_dataset = SetsDataset(csv_path, image_folder, all_labels, transform)
+set_loader = DataLoader(sets_dataset, batch_size=8, shuffle=True)
+
+# STEP 4: Classifier
+class SetClassifier(nn.Module):
+    def __init__(self, num_labels):
+        super().__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_labels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+set_model = SetClassifier(num_labels=len(all_labels)).to(device)
+set_criterion = nn.BCELoss()
+set_optimizer = torch.optim.Adam(set_model.parameters(), lr=1e-4)
+
+# STEP 5: Train
+for epoch in range(15):
+    set_model.train()
+    total_loss = 0
+    for imgs, labels in top_loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        preds = set_model(imgs)
+        loss = top_criterion(preds, labels)
+        set_optimizer.zero_grad()
+        loss.backward()
+        set_optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+# STEP 6: Save Trained Model
+torch.save(set_model.state_dict(), "/content/drive/MyDrive/clothing_dataset/set_classifier.pt")
+print("Set model saved!")
+
+# STEP 7: Predict with Confidence
+def predict_labels_set(image_path):
+    set_model.eval()
+    image = Image.open(image_path).convert("RGB")
+    image = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = set_model(image)[0].cpu().numpy()
+    predicted = [(all_labels[i], output[i]) for i in range(len(output)) if output[i] > 0.5]
+    labels = [lbl for lbl, _ in predicted]
+    print("Predicted Labels:")
+    for lbl, prob in predicted:
+        print(f"• {lbl}: {prob:.2f}")
+    return labels
+
+# STEP 8: Append to CSV
+def save_to_csv_set(filename, labels):
+    label_string = " + ".join(labels)
+    df = pd.read_csv(csv_path)
+    new_row = pd.DataFrame([{"filename": filename, "label": label_string}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Added {filename} to set_labeled.csv")
+
+def label_new_set(image_path):
+    predicted_labels = predict_labels_set(image_path)
+    filename = os.path.basename(image_path)
+    save_to_csv_set(filename, predicted_labels)
+    return predicted_labels
+
+def show_similarity_set(img1_path, img2_path):
+    set_model.eval()
+    try:
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+    except Exception as e:
+        print(f"Error loading image:\n{e}")
+        return
+
+    img1_tensor = transform(img1).unsqueeze(0).to(device)
+    img2_tensor = transform(img2).unsqueeze(0).to(device)
+    with torch.no_grad():
+        backbone = nn.Sequential(*list(top_model.model.children())[:-1])
+        features1 = backbone(img1_tensor).flatten(1)
+        features2 = backbone(img2_tensor).flatten(1)
+        similarity = torch.nn.functional.cosine_similarity(features1, features2).item()
+
+    plt.figure(figsize=(6, 3))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img1)
+    plt.title("Image 1")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img2)
+    plt.title(f"Image 2\nSimilarity: {similarity:.2f}")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.show()
+
+    print(f" Similarity Score: {similarity:.2f}")
+
+show_similarity_set(
+    "/content/drive/MyDrive/clothing_dataset/set/s2.jpg",
+    "/content/drive/MyDrive/clothing_dataset/set/se3.jpg"
+)
+
+show_similarity_set(
+    "/content/drive/MyDrive/clothing_dataset/set/s5.jpg",
+    "/content/drive/MyDrive/clothing_dataset/set/se2.jpg"
+)
+
+show_similarity_set(
+    "/content/drive/MyDrive/clothing_dataset/set/s13.jpg",
+    "/content/drive/MyDrive/clothing_dataset/set/se4.jpg"
+)
+show_similarity_set(
+    "/content/drive/MyDrive/clothing_dataset/set/se1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/set/se7.jpg"
+)
+
+show_similarity_set(
+    "/content/drive/MyDrive/clothing_dataset/set/s1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/set/s10.jpg"
+)
+
+# STEP 11: Test Random Sets
+def test_set_images(sample_folder, count=5):
+    samples = random.sample(os.listdir(sample_folder), count)
+    for img in samples:
+        print(f"\n Testing: {img}")
+        path = os.path.join(sample_folder, img)
+        label_new_set(path)
+
+group_labels = {
+    1: "shoes + flat + plain",
+    2: "shoes + flat + patterned",
+    3: "shoes + sneaker",
+    4: "shoes + heel",
+    5: "shoes + boot"
+}
+
+grouped_shoes = {
+    1: ['z9.jpg', 'z11.jpg', 'z12.jpg', 'z21.png', 'z22.png', 'z23.png', 'z24.png'],
+    2: ['z1.jpg', 'z2.jpg', 'z3.jpg', 'z10.jpg', 'z20.png'],
+    3: ['z13.jpg', 'z4.jpg', 'z5.jpg', 'z6.jpg', 'z7.jpg', 'z8.jpg', 'z14.jpg', 'z15.jpg', 'z16.jpg', 'z17.jpg', 'z18.jpg', 'z19.png'],
+    4: ['zt1.jpg', 'zt2.jpg', 'zt3.jpg', 'zt4.jpg', 'zt5.png', 'zt6.png', 'zt7.png', 'zt8.png', 'zt9.png', 'zt10.png', 'zt11.png', 'zt12.png'],
+    5: ['zb1.jpg', 'zb2.jpg', 'zb3.jpg', 'zb4.jpg', 'zb5.jpg', 'zb6.jpg', 'zb7.jpg', 'zb9.jpg', 'zb10.png', 'zb11.png', 'zb12.png','zb8.jpg']
+
+}
+
+import pandas as pd
+
+# STEP: Escribir los datos agrupados al CSV
+labeled_shoes = []
+
+for group_id, files in grouped_shoes.items():
+    label = group_labels.get(group_id, "unknown")
+    for filename in files:
+        labeled_shoes.append({
+            "filename": filename,
+            "label": label
+        })
+
+# Guardar CSV
+csv_path_shoes = "/content/drive/MyDrive/clothing_dataset/shoes_labeled.csv"
+df = pd.DataFrame(labeled_shoes)
+df.to_csv(csv_path_shoes, index=False)
+print("shoes_labeled.csv populated and saved!")
+
+
+# STEP 2: Dataset Class for Shoes
+class ShoesDataset(Dataset):
+    def __init__(self, csv_path, image_folder, all_labels, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.image_folder = image_folder
+        self.transform = transform
+        self.all_labels = all_labels
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.image_folder, row['filename'])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label_vector = torch.zeros(len(self.all_labels))
+        for tag in row['label'].split("+"):
+            tag = tag.strip()
+            if tag in self.all_labels:
+                label_vector[self.all_labels.index(tag)] = 1
+
+        return image, label_vector
+
+# STEP 3: Load Shoes Data
+csv_path = "/content/drive/MyDrive/clothing_dataset/shoes_labeled.csv"
+image_folder = "/content/drive/MyDrive/clothing_dataset/shoes"
+shoes_dataset = ShoesDataset(csv_path, image_folder, all_labels, transform)
+shoes_loader = DataLoader(shoes_dataset, batch_size=8, shuffle=True)
+
+# STEP 4: Shoes Classifier
+class ShoesClassifier(nn.Module):
+    def __init__(self, num_labels):
+        super().__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_labels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+shoes_model = ShoesClassifier(num_labels=len(all_labels)).to(device)
+shoes_criterion = nn.BCELoss()
+shoes_optimizer = torch.optim.Adam(shoes_model.parameters(), lr=1e-4)
+
+# STEP 5: Train
+for epoch in range(15):
+    shoes_model.train()
+    total_loss = 0
+    for imgs, labels in shoes_loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        preds = shoes_model(imgs)
+        loss = shoes_criterion(preds, labels)
+        shoes_optimizer.zero_grad()
+        loss.backward()
+        shoes_optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+# STEP 6: Save Trained Model
+torch.save(shoes_model.state_dict(), "/content/drive/MyDrive/clothing_dataset/shoes_classifier.pt")
+print("Top model saved!")
+
+# STEP 7: Predict with Confidence
+def predict_labels_shoes(image_path):
+    shoes_model.eval()
+    image = Image.open(image_path).convert("RGB")
+    image = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = shoes_model(image)[0].cpu().numpy()
+    predicted = [(all_labels[i], output[i]) for i in range(len(output)) if output[i] > 0.5]
+    labels = [lbl for lbl, _ in predicted]
+    print("Predicted Labels:")
+    for lbl, prob in predicted:
+        print(f"• {lbl}: {prob:.2f}")
+    return labels
+
+# STEP 8: Append to CSV
+def save_to_csv_shoes(filename, labels):
+    label_string = " + ".join(labels)
+    df = pd.read_csv(csv_path)
+    new_row = pd.DataFrame([{"filename": filename, "label": label_string}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Added {filename} to shoes_labeled.csv")
+
+# STEP 9: Label New Image
+def label_new_shoes(image_path):
+    predicted_labels = predict_labels_shoes(image_path)
+    filename = os.path.basename(image_path)
+    save_to_csv_shoes(filename, predicted_labels)
+    return predicted_labels
+
+def show_similarity_shoes(img1_path, img2_path):
+    shoes_model.eval()
+    try:
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+    except Exception as e:
+        print(f" Error loading image:\n{e}")
+        return
+
+    img1_tensor = transform(img1).unsqueeze(0).to(device)
+    img2_tensor = transform(img2).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        backbone = nn.Sequential(*list(shoes_model.model.children())[:-1])
+        features1 = backbone(img1_tensor).flatten(1)
+        features2 = backbone(img2_tensor).flatten(1)
+        similarity = torch.nn.functional.cosine_similarity(features1, features2).item()
+
+    plt.figure(figsize=(6, 3))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img1)
+    plt.title("Shoe Image 1")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img2)
+    plt.title(f"Shoe Image 2\nSimilarity: {similarity:.2f}")
+    plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f" Similarity Score (Shoes): {similarity:.2f}")
+
+show_similarity_shoes(
+    "/content/drive/MyDrive/clothing_dataset/shoes/z1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/shoes/z5.jpg"
+)
+
+show_similarity_shoes(
+    "/content/drive/MyDrive/clothing_dataset/shoes/zb1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/shoes/zb6.jpg"
+)
+
+show_similarity_shoes(
+    "/content/drive/MyDrive/clothing_dataset/shoes/zt1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/shoes/zt3.jpg"
+)
+
+show_similarity_shoes(
+    "/content/drive/MyDrive/clothing_dataset/shoes/z2.jpg",
+    "/content/drive/MyDrive/clothing_dataset/shoes/zb3.jpg"
+)
+
+show_similarity_shoes(
+    "/content/drive/MyDrive/clothing_dataset/shoes/zb4.jpg",
+    "/content/drive/MyDrive/clothing_dataset/shoes/zt2.jpg"
+)
+
+
+# STEP 11: Test Random shoes
+def test_shoes_images(sample_folder, count=5):
+    samples = random.sample(os.listdir(sample_folder), count)
+    for img in samples:
+        print(f" Testing: {img}")
+        path = os.path.join(sample_folder, img)
+        label_new_shoes(path)
+
+group_labels = {
+    1: "jacket + coat + plain",
+    2: "jacket + coat + patterned",
+    3: "jacket + blazer"
+}
+
+grouped_jackets = {
+    1: ['j6.jpg', 'j13.jpg', 'j27.jpg', 'j7.jpg', 'j22.jpg', 'j2.jpg', 'j10.jpg', 'j4.jpg', 'j5.jpg', 'j32.jpg', 'j23.jpg', 'j24.jpg', 'j8.jpg', 'j29.jpg', 'j26.jpg', 'j12.jpg', 'j25.jpg', 'j17.jpg', 'j19.jpg', 'j15.jpg', 'j11.jpg', 'j20.jpg', 'j28.jpg', 'j30.jpg', 'j21.jpg', 'j9.jpg', 'j1.jpg', 'j14.jpg', 'j16.jpg', 'j18.jpg', 'j3.jpg', 'j31.jpg'],
+    2: ['jb1.jpg', 'jb3.jpg', 'jb4.jpg', 'jb7.jpg','jb2.jpg', 'jb5.jpg', 'jb6.jpg', 'jb8.jpg', 'jb9.jpg'],
+    3: ['je4.jpg','j6.jpg' ,'je3.jpg', 'je2.jpg', 'je5.jpg', 'je8.jpg','je7.jpg','je6.jpg','je1.jpg']
+}
+
+labeled_jackets = []
+
+for group_id, files in grouped_jackets.items():
+    label = group_labels.get(group_id, "unknown")
+    for filename in files:
+        labeled_jackets.append({
+            "filename": filename,
+            "label": label
+        })
+
+# Guardar CSV
+csv_path_jacket = "/content/drive/MyDrive/clothing_dataset/jacket_labeled.csv"
+df = pd.DataFrame(labeled_jackets)
+df.to_csv(csv_path_jacket, index=False)
+print("jacket_labeled.csv populated and saved!")
+
+# STEP 2: Dataset Class for Jackets
+class JacketsDataset(Dataset):
+    def __init__(self, csv_path, image_folder, all_labels, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.image_folder = image_folder
+        self.transform = transform
+        self.all_labels = all_labels
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.image_folder, row['filename'])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label_vector = torch.zeros(len(self.all_labels))
+        for tag in row['label'].split("+"):
+            tag = tag.strip()
+            if tag in self.all_labels:
+                label_vector[self.all_labels.index(tag)] = 1
+
+        return image, label_vector
+
+# STEP 3: Load Jackets Data
+csv_path = "/content/drive/MyDrive/clothing_dataset/jacket_labeled.csv"
+image_folder = "/content/drive/MyDrive/clothing_dataset/jacket"
+jackets_dataset = JacketsDataset(csv_path, image_folder, all_labels, transform)
+jackets_loader = DataLoader(jackets_dataset, batch_size=8, shuffle=True)
+
+# STEP 4: Jackets Classifier
+class JacketsClassifier(nn.Module):
+    def __init__(self, num_labels):
+        super().__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_labels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+jacket_model = JacketsClassifier(num_labels=len(all_labels)).to(device)
+jacket_criterion = nn.BCELoss()
+jacket_optimizer = torch.optim.Adam(jacket_model.parameters(), lr=1e-4)
+
+# STEP 5: Train
+for epoch in range(15):
+    jacket_model.train()
+    total_loss = 0
+    for imgs, labels in jackets_loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        preds = jacket_model(imgs)
+        loss = jacket_criterion(preds, labels)
+        jacket_optimizer.zero_grad()
+        loss.backward()
+        jacket_optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+
+# STEP 6: Save Trained Model
+torch.save(jacket_model.state_dict(), "/content/drive/MyDrive/clothing_dataset/jacket_classifier.pt")
+print(" Top model saved!")
+
+# STEP 7: Predict with Confidence
+def predict_labels_jackets(image_path):
+    jacket_model.eval()
+    image = Image.open(image_path).convert("RGB")
+    image = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = jacket_model(image)[0].cpu().numpy()
+    predicted = [(all_labels[i], output[i]) for i in range(len(output)) if output[i] > 0.5]
+    labels = [lbl for lbl, _ in predicted]
+    print("Predicted Labels:")
+    for lbl, prob in predicted:
+        print(f"• {lbl}: {prob:.2f}")
+    return labels
+
+
+
+# STEP 8: Append to CSV
+def save_to_csv_jackets(filename, labels):
+    label_string = " + ".join(labels)
+    df = pd.read_csv(csv_path)
+    new_row = pd.DataFrame([{"filename": filename, "label": label_string}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Added {filename} to jacket_labeled.csv")
+
+# STEP 9: Label New Image
+def label_new_jackets(image_path):
+    predicted_labels = predict_labels_jackets(image_path)
+    filename = os.path.basename(image_path)
+    save_to_csv_jackets(filename, predicted_labels)
+    return predicted_labels
+
+
+def show_similarity_jacket(img1_path, img2_path):
+    jacket_model.eval()
+    try:
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+    except Exception as e:
+        print(f" Error loading image:\n{e}")
+        return
+
+    img1_tensor = transform(img1).unsqueeze(0).to(device)
+    img2_tensor = transform(img2).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        backbone = nn.Sequential(*list(jacket_model.model.children())[:-1])
+        features1 = backbone(img1_tensor).flatten(1)
+        features2 = backbone(img2_tensor).flatten(1)
+        similarity = torch.nn.functional.cosine_similarity(features1, features2).item()
+
+    plt.figure(figsize=(6, 3))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img1)
+    plt.title("jacket Image 1")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img2)
+    plt.title(f"jacket Image 2\nSimilarity: {similarity:.2f}")
+    plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    print(f" Similarity Score (jackets): {similarity:.2f}")
+
+# Plain vs Plain (High similarity)
+show_similarity_jacket(
+    "/content/drive/MyDrive/clothing_dataset/jacket/j1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/jacket/j20.jpg"
+)
+
+# Patterned vs Patterned (High similarity)
+show_similarity_jacket(
+    "/content/drive/MyDrive/clothing_dataset/jacket/je1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/jacket/je2.jpg"
+)
+
+# Plain vs Patterned (Low similarity)
+show_similarity_jacket(
+    "/content/drive/MyDrive/clothing_dataset/jacket/j3.jpg",
+    "/content/drive/MyDrive/clothing_dataset/jacket/je3.jpg"
+)
+
+# STEP 11: Test Random Tops
+def test_jacket_images(sample_folder, count=5):
+    samples = random.sample(os.listdir(sample_folder), count)
+    for img in samples:
+        print(f"\n Testing: {img}")
+        path = os.path.join(sample_folder, img)
+        label_new_jacket(path)
+
+group_labels = {
+    1: "complement + bag "
+}
+
+grouped_complements = {
+    1: ['c1.jpg', 'c2.jpg', 'c3.jpg', 'c4.jpg', 'c5.jpg', 'c6.jpg', 'c8.jpg', 'c9.jpg', 'c10.jpg',
+        'c11.jpg', 'c12.jpg', 'c13.jpg', 'c14.jpg', 'c15.jpg', 'c16.jpg', 'c17.jpg', 'c18.jpg', 'c19.jpg',
+        'c20.jpg', 'c21.jpg', 'c22.jpg', 'c23.jpg', 'ce1.jpg', 'ce2.jpg', 'ce3.jpg', 'ce4.jpg']
+}
+
+labeled_complements = []
+
+for group_id, files in grouped_complements.items():
+    label = group_labels.get(group_id, "unknown")
+    for filename in files:
+        labeled_complements.append({
+            "filename": filename,
+            "label": label
+        })
+
+# Guardar CSV
+csv_path_complement = "/content/drive/MyDrive/clothing_dataset/complement_labeled.csv"
+df = pd.DataFrame(labeled_complements)
+df.to_csv(csv_path_complement, index=False)
+print("complement_labeled.csv populated and saved!")
+
+class ComplementsDataset(Dataset):
+    def __init__(self, csv_path, image_folder, all_labels, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.image_folder = image_folder
+        self.transform = transform
+        self.all_labels = all_labels
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = os.path.join(self.image_folder, row['filename'])
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        label_vector = torch.zeros(len(self.all_labels))
+        for tag in row['label'].split("+"):
+            tag = tag.strip()
+            if tag in self.all_labels:
+                label_vector[self.all_labels.index(tag)] = 1
+
+        return image, label_vector
+
+# STEP 3: Load Complements Data
+csv_path = "/content/drive/MyDrive/clothing_dataset/complement_labeled.csv"
+image_folder = "/content/drive/MyDrive/clothing_dataset/complement"
+complements_dataset = ComplementsDataset(csv_path, image_folder, all_labels, transform)
+complements_loader = DataLoader(complements_dataset, batch_size=8, shuffle=True)
+
+# STEP 4: Complements Classifier
+class ComplementsClassifier(nn.Module):
+    def __init__(self, num_labels):
+        super().__init__()
+        self.model = models.resnet18(pretrained=True)
+        self.model.fc = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_labels),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.model(x)
+
+complements_model = ComplementsClassifier(num_labels=len(all_labels)).to(device)
+complements_criterion = nn.BCELoss()
+complements_optimizer = torch.optim.Adam(complements_model.parameters(), lr=1e-4)
+
+# STEP 5: Train
+for epoch in range(15):
+    complements_model.train()
+    total_loss = 0
+    for imgs, labels in complements_loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+        preds = complements_model(imgs)
+        loss = complements_criterion(preds, labels)
+        complements_optimizer.zero_grad()
+        loss.backward()
+        complements_optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1} - Loss: {total_loss:.4f}")
+
+# STEP 6: Save Trained Model
+torch.save(complements_model.state_dict(), "/content/drive/MyDrive/clothing_dataset/complement_classifier.pt")
+print("complement model saved!")
+
+# STEP 7: Predict with Confidence
+def predict_labels_complements(image_path):
+    complements_model.eval()
+    image = Image.open(image_path).convert("RGB")
+    image = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        output = complements_model(image)[0].cpu().numpy()
+    predicted = [(all_labels[i], output[i]) for i in range(len(output)) if output[i] > 0.5]
+    labels = [lbl for lbl, _ in predicted]
+    print("Predicted Labels:")
+    for lbl, prob in predicted:
+        print(f"• {lbl}: {prob:.2f}")
+    return labels
+
+# STEP 8: Append to CSV
+def save_to_csv_complements(filename, labels):
+    label_string = " + ".join(labels)
+    df = pd.read_csv(csv_path)
+    new_row = pd.DataFrame([{"filename": filename, "label": label_string}])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Added {filename} to complement_labeled.csv")
+
+# STEP 9: Label New Image
+def label_new_complements(image_path):
+    predicted_labels = predict_labels_complements(image_path)
+    filename = os.path.basename(image_path)
+    save_to_csv_complements(filename, predicted_labels)
+    return predicted_labels
+
+def show_similarity_complement(img1_path, img2_path):
+    complements_model.eval()
+    try:
+        img1 = Image.open(img1_path).convert("RGB")
+        img2 = Image.open(img2_path).convert("RGB")
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return
+
+    img1_tensor = transform(img1).unsqueeze(0).to(device)
+    img2_tensor = transform(img2).unsqueeze(0).to(device)
+    with torch.no_grad():
+        backbone = nn.Sequential(*list(complements_model.model.children())[:-1])
+        features1 = backbone(img1_tensor).flatten(1)
+        features2 = backbone(img2_tensor).flatten(1)
+        similarity = torch.nn.functional.cosine_similarity(features1, features2).item()
+
+    plt.figure(figsize=(6, 3))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img1)
+    plt.title("Complement Image 1")
+    plt.axis("off")
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(img2)
+    plt.title(f"Complement Image 2 Similarity: {similarity:.2f}")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.show()
+
+    print(f"Similarity Score (Complement): {similarity:.2f}")
+
+# Plain vs Plain (should be HIGH)
+show_similarity_complement(
+    "/content/drive/MyDrive/clothing_dataset/complement/c1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/complement/c15.jpg"
+)
+
+# Patterned vs Patterned (should be HIGH)
+show_similarity_complement(
+    "/content/drive/MyDrive/clothing_dataset/complement/ce1.jpg",
+    "/content/drive/MyDrive/clothing_dataset/complement/ce3.jpg"
+)
+
+# Plain vs Patterned (should be LOW)
+show_similarity_complement(
+    "/content/drive/MyDrive/clothing_dataset/complement/c10.jpg",
+    "/content/drive/MyDrive/clothing_dataset/complement/ce2.jpg"
+)
+
+def test_complements_images(sample_folder, count=5):
+    samples = random.sample(os.listdir(sample_folder), count)
+    for img in samples:
+        print(f" Testing: {img}")
+        path = os.path.join(sample_folder, img)
+        label_new_complements(path)
+
+#Adding new clothes
+def auto_label_folder(category):
+    # Mapping each category to its components
+    folder_map = {
+        "bottom": {
+            "path": "/content/drive/MyDrive/clothing_dataset/bottom",
+            "csv": "/content/drive/MyDrive/clothing_dataset/bottom_labeled.csv",
+            "label_func": label_new_bottom
+        },
+        "top": {
+            "path": "/content/drive/MyDrive/clothing_dataset/top",
+            "csv": "/content/drive/MyDrive/clothing_dataset/top_labeled.csv",
+            "label_func": label_new_top
+        },
+        "set": {
+            "path": "/content/drive/MyDrive/clothing_dataset/set",
+            "csv": "/content/drive/MyDrive/clothing_dataset/set_labeled.csv",
+            "label_func": label_new_set
+        },
+        "shoes": {
+            "path": "/content/drive/MyDrive/clothing_dataset/shoes",
+            "csv": "/content/drive/MyDrive/clothing_dataset/shoes_labeled.csv",
+            "label_func": label_new_shoes
+        },
+        "jacket": {
+            "path": "/content/drive/MyDrive/clothing_dataset/jacket",
+            "csv": "/content/drive/MyDrive/clothing_dataset/jacket_labeled.csv",
+            "label_func": label_new_jackets
+        },
+        "complement": {
+            "path": "/content/drive/MyDrive/clothing_dataset/complement",
+            "csv": "/content/drive/MyDrive/clothing_dataset/complement_labeled.csv",
+            "label_func": label_new_complements
+        }
+    }
+
+    if category not in folder_map:
+        print(f"Invalid category: {category}")
+        return
+
+    info = folder_map[category]
+    folder = info["path"]
+    csv_path = info["csv"]
+    label_func = info["label_func"]
+
+    # Get all image files in the folder
+    image_files = [f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+    # Load existing CSV to skip already labeled images
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        labeled_files = set(df['filename'].tolist())
+    else:
+        labeled_files = set()
+
+    new_images = [f for f in image_files if f not in labeled_files]
+
+    if not new_images:
+        print(f"No new images to label in {category}")
+        return
+
+    print(f"Labeling {len(new_images)} new images in '{category}'...")
+
+    for img in new_images:
+        image_path = os.path.join(folder, img)
+        label_func(image_path)
+
+    print(f" Finished labeling all new images in '{category}'!")
+
+#just run the one that you need
+auto_label_folder("bottom")
+auto_label_folder("top")
+auto_label_folder("set")
+auto_label_folder("shoes")
+auto_label_folder("jacket")
+auto_label_folder("complement")
+
+#NO NEED TO TRAIN EVERYTHING AGAIN
+def load_model(model_class, model_path, num_labels, device):
+    model = model_class(num_labels=num_labels)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    return model
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+bottom_model = load_model(BottomClassifier, "/content/drive/MyDrive/clothing_dataset/bottom_classifier.pt", len(all_labels), device)
+top_model = load_model(TopClassifier, "/content/drive/MyDrive/clothing_dataset/top_classifier.pt", len(all_labels), device)
+set_model = load_model(SetClassifier, "/content/drive/MyDrive/clothing_dataset/set_classifier.pt", len(all_labels), device)
+shoes_model = load_model(ShoesClassifier, "/content/drive/MyDrive/clothing_dataset/shoes_classifier.pt", len(all_labels), device)
+jacket_model = load_model(JacketsClassifier, "/content/drive/MyDrive/clothing_dataset/jacket_classifier.pt", len(all_labels), device)
+complements_model = load_model(ComplementsClassifier, "/content/drive/MyDrive/clothing_dataset/complement_classifier.pt", len(all_labels), device)
+
+df_bottom = pd.read_csv("/content/drive/MyDrive/clothing_dataset/bottom_labeled.csv")
+df_top = pd.read_csv("/content/drive/MyDrive/clothing_dataset/top_labeled.csv")
+df_set = pd.read_csv("/content/drive/MyDrive/clothing_dataset/set_labeled.csv")
+df_shoes = pd.read_csv("/content/drive/MyDrive/clothing_dataset/shoes_labeled.csv")
+df_jacket = pd.read_csv("/content/drive/MyDrive/clothing_dataset/jacket_labeled.csv")
+df_complement = pd.read_csv("/content/drive/MyDrive/clothing_dataset/complement_labeled.csv")
+
+
+# STEP 2: Ask user
+style = input("Choose your style (casual or chic): ").strip().lower()
+outfit = None
+include_coat = False
+if style == "casual":
+    coat_answer = input("Do you want a coat layer? (yes/no): ").strip().lower()
+    include_coat = (coat_answer == "yes")
+
+# STEP 3: Utilities
+def is_plain(label):
+    return "patterned" not in label
+
+def is_patterned(label):
+    return "patterned" in label
+
+def is_skirt(label):
+    return "skirt" in label
+
+def is_pants(label):
+    return "pants" in label
+
+def is_blazer(label):
+    return "blazer" in label
+
+def is_coat(label):
+    return "coat" in label
+
+def is_flat(label):
+    return "flat" in label
+
+def is_sneaker(label):
+    return "sneaker" in label
+
+def is_heel(label):
+    return "heel" in label
+
+def is_boot(label):
+    return "boot" in label
+
+# RULES FOR CHIC Outfit 
+def generate_random_chic_outfit():
+    # Try SET-based outfit first
+    heels = df_shoes[df_shoes['label'].apply(is_heel)]
+    complements = df_complement
+    valid_sets = df_set[df_set['label'].apply(lambda x: is_plain(x) or is_patterned(x))]
+    if not valid_sets.empty and not heels.empty:
+        set_row = valid_sets.sample(1).iloc[0]
+        heel_row = heels.sample(1).iloc[0]
+        comp_row = complements.sample(1).iloc[0]
+        return {
+            "set": set_row['filename'],
+            "shoes": heel_row['filename'],
+            "complement": comp_row['filename']
+        }
+
+    # Otherwise: skirt + top + heel + complement
+    skirts = df_bottom[df_bottom['label'].apply(is_skirt)]
+    if skirts.empty:
+        return None
+
+    bottom_row = skirts.sample(1).iloc[0]
+    if is_patterned(bottom_row['label']):
+        top_candidates = df_top[df_top['label'].apply(is_plain)]
+    else:
+        top_candidates = df_top
+
+    top_row = top_candidates.sample(1).iloc[0]
+    if is_patterned(bottom_row['label']) and is_patterned(top_row['label']):
+        return generate_random_chic_outfit()  # retry
+
+    heel_row = heels.sample(1).iloc[0]
+    comp_row = complements.sample(1).iloc[0]
+
+    return {
+        "top": top_row['filename'],
+        "bottom": bottom_row['filename'],
+        "shoes": heel_row['filename'],
+        "complement": comp_row['filename']
+    }
+
+#RULES FOR CASUAL OUTFIT
+def generate_random_casual_outfit(include_coat):
+    while True:
+        top_row = df_top.sample(1).iloc[0]
+        bottom_row = df_bottom.sample(1).iloc[0]
+
+        if is_patterned(top_row['label']) and is_patterned(bottom_row['label']):
+            continue  # skip pattern-on-pattern
+
+        shoe_row = df_shoes[~df_shoes['label'].apply(is_heel)].sample(1).iloc[0]
+        comp_row = df_complement.sample(1).iloc[0]
+
+        outfit = {
+            "top": top_row['filename'],
+            "bottom": bottom_row['filename'],
+            "shoes": shoe_row['filename'],
+            "complement": comp_row['filename']
+        }
+
+        # Optional: Add blazer (randomly)
+        if random.random() < 0.5:
+            blazers = df_jacket[df_jacket['label'].apply(is_blazer)]
+            if not blazers.empty:
+                outfit['jacket'] = blazers.sample(1).iloc[0]['filename']
+
+        # Optional: Add coat if cold
+        if include_coat:
+            plain = all(is_plain(x['label']) for x in [top_row, bottom_row, shoe_row, comp_row])
+            candidates = df_jacket[df_jacket['label'].apply(is_coat)]
+            candidates = candidates[df_jacket['label'].apply(is_patterned if plain else is_plain)]
+            if not candidates.empty:
+                outfit['coat'] = candidates.sample(1).iloc[0]['filename']
+
+        return outfit
+
+#SHOW THE OUTFIT
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+
+# Initial outfit setup
+if style == "chic":
+    outfit = generate_random_chic_outfit()
+else:
+    outfit = generate_random_casual_outfit(include_coat)
+
+# Output area
+out_display = widgets.Output()
+
+# Buttons
+btn_yes = widgets.Button(description="Yes")
+btn_no = widgets.Button(description="No")
+
+def show_outfit():
+    global outfit
+    with out_display:
+        clear_output()
+        if style == "chic":
+            outfit = generate_random_chic_outfit()
+        else:
+            outfit = generate_random_casual_outfit(include_coat)
+
+        print("\nOutfit Suggestion:")
+        for piece, item in outfit.items():
+            print(f"{piece.capitalize()}: {item}")
+
+        plt.figure(figsize=(15, 3))
+        for i, (piece, item) in enumerate(outfit.items()):
+            img_path = f"/content/drive/MyDrive/clothing_dataset/{piece}/{item}"
+            try:
+                img = mpimg.imread(img_path)
+                plt.subplot(1, len(outfit), i+1)
+                plt.imshow(img)
+                plt.title(piece.capitalize())
+                plt.axis("off")
+            except Exception as e:
+                print(f"Error loading {img_path}: {e}")
+        plt.tight_layout()
+        plt.show()
+
+        display(widgets.HBox([btn_yes, btn_no]))
+
+def save_outfit(b):
+    df = pd.DataFrame([outfit])
+    df.to_csv(f"/content/drive/MyDrive/clothing_dataset/{style}_outfits.csv", mode='a', header=False, index=False)
+    with out_display:
+        print("Outfit saved!")
+
+def try_another(b):
+    show_outfit()
+
+btn_yes.on_click(save_outfit)
+btn_no.on_click(try_another)
+
+# Start the loop
+show_outfit()
+display(out_display)
